@@ -23,7 +23,7 @@ try:
     nest_asyncio.apply(loop)
 except: pass
 
-st.set_page_config(page_title="APEX // Pump & Dump Scanner", page_icon="🔥", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="APEX3 // Pump & Dump Scanner", page_icon="🔥", layout="wide", initial_sidebar_state="expanded")
 
 _SS_DEFAULTS = {
     'results':[], 'last_scan':"—", 'scan_count':0, 'btc_price':0, 'btc_trend':"—",
@@ -255,16 +255,16 @@ def check_daily_summary(s):
              f"✅ TP Hits: **{tps}** | 🛑 SL Hits: **{sls}** | 🔄 Active: **{active}**\n"
              f"🎯 Win Rate: **{wr:.1f}%**\n"
              f"━━━━━━━━━━━━━━━━━\n"
-             f"*Powered by APEX Intelligence Terminal*")
+             f"*Powered by APEX3 Intelligence Terminal*")
         tg_msg=msg.replace("**","<b>").replace("**","</b>")
         if s.get('tg_token') and s.get('tg_chat_id'):
             send_tg(s['tg_token'],s['tg_chat_id'],tg_msg.replace("**","").replace("*",""))
         if s.get('discord_webhook'):
             send_discord(s['discord_webhook'],{
-                "title":"📊 APEX 24h Journal Summary",
+                "title":"📊 APEX3 24h Journal Summary",
                 "color":0x2563eb,
                 "description":msg,
-                "footer":{"text":f"APEX Terminal • {now.strftime('%H:%M UTC')}"}
+                "footer":{"text":f"APEX3 Terminal • {now.strftime('%H:%M UTC')}"}
             })
     except: pass
 
@@ -1602,7 +1602,7 @@ def render_card(res, is_sniper=False, dual_confirmed=False):
 
 # ─── SIDEBAR ─────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.title("⚡ APEX")
+    st.title("⚡ APEX3")
     st.caption("Pump & Dump Intelligence")
     # FIX: Use session state for nav to prevent journal→scanner glitch
     nav_options=["🔥 Scanner","⚙️ Settings","📒 Journal","📊 Backtest"]
@@ -1645,7 +1645,7 @@ with st.sidebar:
 
 
 # ─── HEADER / TICKER ─────────────────────────────────────────────────────────
-st.markdown('<div style="padding:18px 0 14px;"><div style="font-family:monospace;font-size:1.5rem;font-weight:700;color:#0f1117;">APEX</div><div style="font-family:monospace;font-size:.56rem;font-weight:400;letter-spacing:.16em;color:#7a82a0;text-transform:uppercase;margin-top:2px;">Pump & Dump Intelligence Terminal v3.0 — Dual Confirm + FVG + Backtest</div></div>',unsafe_allow_html=True)
+st.markdown('<div style="padding:18px 0 14px;"><div style="font-family:monospace;font-size:1.5rem;font-weight:700;color:#0f1117;">APEX3</div><div style="font-family:monospace;font-size:.56rem;font-weight:400;letter-spacing:.16em;color:#7a82a0;text-transform:uppercase;margin-top:2px;">Pump & Dump Intelligence Terminal v3.0 — Dual Confirm + FVG + Backtest</div></div>',unsafe_allow_html=True)
 
 if time.time()-st.session_state.get('fng_last_fetch',0)>300:
     try:
