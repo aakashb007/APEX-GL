@@ -23,7 +23,7 @@ try:
     nest_asyncio.apply(loop)
 except: pass
 
-st.set_page_config(page_title="APEX // Pump & Dump Scanner", page_icon="🔥", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="APEX4 // Pump & Dump Scanner", page_icon="🔥", layout="wide", initial_sidebar_state="expanded")
 
 _SS_DEFAULTS = {
     'results':[], 'last_scan':"—", 'scan_count':0, 'btc_price':0, 'btc_trend':"—",
@@ -249,20 +249,20 @@ def check_daily_summary(s):
         tps=len(df24[df24['status']=='TP']); sls=len(df24[df24['status']=='SL'])
         active=len(df24[df24['status']=='ACTIVE'])
         wr=(tps/(tps+sls)*100) if (tps+sls)>0 else 0
-        msg=(f"📊 **APEX 24h Journal Summary**\n"
+        msg=(f"📊 **APEX4 24h Journal Summary**\n"
              f"🕐 {now.strftime('%Y-%m-%d %H:%M UTC')}\n"
              f"━━━━━━━━━━━━━━━━━\n"
              f"Total Signals: **{total}** | 📗 Long: **{longs}** | 📕 Short: **{shorts}**\n"
              f"✅ TP Hits: **{tps}** | 🛑 SL Hits: **{sls}** | 🔄 Active: **{active}**\n"
              f"🎯 Win Rate: **{wr:.1f}%**\n"
              f"━━━━━━━━━━━━━━━━━\n"
-             f"*Powered by APEX Intelligence Terminal*")
+             f"*Powered by APEX4 Intelligence Terminal*")
         tg_msg=msg.replace("**","<b>").replace("**","</b>")
         if s.get('tg_token') and s.get('tg_chat_id'):
             send_tg(s['tg_token'],s['tg_chat_id'],tg_msg.replace("**","").replace("*",""))
         if s.get('discord_webhook'):
             send_discord(s['discord_webhook'],{
-                "title":"📊 APEX 24h Journal Summary",
+                "title":"📊 APEX4 24h Journal Summary",
                 "color":0x2563eb,
                 "description":msg,
                 "footer":{"text":f"APEX Terminal • {now.strftime('%H:%M UTC')}"}
@@ -1720,7 +1720,7 @@ def render_card(res, is_sniper=False, dual_confirmed=False):
 
 # ─── SIDEBAR ─────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.title("⚡ APEX")
+    st.title("⚡ APEX4")
     st.caption("Pump & Dump Intelligence")
     # FIX: Use session state for nav to prevent journal→scanner glitch
     nav_options=["🔥 Scanner","⚙️ Settings","📒 Journal","📊 Backtest"]
@@ -1764,7 +1764,7 @@ with st.sidebar:
 
 
 # ─── HEADER / TICKER ─────────────────────────────────────────────────────────
-st.markdown('<div style="padding:18px 0 14px;"><div style="font-family:monospace;font-size:1.5rem;font-weight:700;color:#0f1117;">APEX</div><div style="font-family:monospace;font-size:.56rem;font-weight:400;letter-spacing:.16em;color:#7a82a0;text-transform:uppercase;margin-top:2px;">Pump & Dump Intelligence Terminal v3.0 — Dual Confirm + FVG + Backtest</div></div>',unsafe_allow_html=True)
+st.markdown('<div style="padding:18px 0 14px;"><div style="font-family:monospace;font-size:1.5rem;font-weight:700;color:#0f1117;">APEX4</div><div style="font-family:monospace;font-size:.56rem;font-weight:400;letter-spacing:.16em;color:#7a82a0;text-transform:uppercase;margin-top:2px;">Pump & Dump Intelligence Terminal v3.0 — Dual Confirm + FVG + Backtest</div></div>',unsafe_allow_html=True)
 
 if time.time()-st.session_state.get('fng_last_fetch',0)>300:
     try:
@@ -2120,7 +2120,7 @@ if nav=="📒 Journal":
         if js in dv.columns: dv=dv.sort_values(js,ascending=(js!='pump_score'))
         st.dataframe(dv,use_container_width=True,height=500)
         st.download_button("⬇️ Export CSV",dv.to_csv(index=False).encode(),
-            file_name=f"apex_{datetime.now().strftime('%Y%m%d')}.csv",mime="text/csv")
+            file_name=f"apex4_{datetime.now().strftime('%Y%m%d')}.csv",mime="text/csv")
     st.stop()
 
 
@@ -2341,7 +2341,7 @@ if nav=="📊 Backtest":
             st.download_button(
                 "⬇️ Export External Backtest CSV",
                 df_ext_res.to_csv(index=False).encode(),
-                file_name=f"apex_external_backtest_{datetime.now().strftime('%Y%m%d')}.csv",
+                file_name=f"apex4_external_backtest_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv")
 
         st.stop()
@@ -2561,7 +2561,7 @@ if nav=="📊 Backtest":
         st.download_button(
             "⬇️ Export Full Backtest CSV",
             df_res.to_csv(index=False).encode(),
-            file_name=f"apex_backtest_{datetime.now().strftime('%Y%m%d')}.csv",
+            file_name=f"apex4_backtest_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv")
 
     st.stop()
@@ -2694,7 +2694,7 @@ if do_scan:
                                 {'name':f'📝 All Reasons ({len(r["reasons"])})','value':reasons_str[:1024],'inline':False},
                                 *([{'name':'📝 Reasons (continued)','value':reasons_str[1024:2048],'inline':False}] if len(reasons_str)>1024 else [])
                             ],
-                            'footer':{'text':f'APEX Intelligence Terminal • {datetime.now(timezone.utc).strftime("%H:%M:%S")} UTC'}
+                            'footer':{'text':f'APEX4 Intelligence Terminal • {datetime.now(timezone.utc).strftime("%H:%M:%S")} UTC'}
                         })
                     st.session_state.alerted_sigs.add(ak_recheck)
                     _ch=[c for c,v in [('Discord',eff_s.get('discord_webhook')),('Telegram',eff_s.get('tg_token') and eff_s.get('tg_chat_id'))] if v]
@@ -2803,7 +2803,7 @@ if st.session_state.get('sentinel_active') and do_scan and st.session_state.scan
                                            f"TP1: `${_tp1:.6f}` | TP2: `${_tp2:.6f}` | TP3: `${_tp3:.6f}`\n"
                                            f"🛑 SL: `${_s_:.6f}`"),
                             "fields":[{'name':f'📝 All Reasons ({len(r["reasons"])})','value':"\n".join([f"▸ {x}" for x in r['reasons']])[:1024],'inline':False}],
-                            "footer":{"text":f"APEX Sentinel — Top 100 | {datetime.now(timezone.utc).strftime('%H:%M UTC')}"}})
+                            "footer":{"text":f"APEX4 Sentinel — Top 100 | {datetime.now(timezone.utc).strftime('%H:%M UTC')}"}})
                     st.session_state.alerted_sigs.add(ak)
 
         chk_f=st.session_state.get('sentinel_total_checked',0)
