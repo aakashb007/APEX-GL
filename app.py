@@ -1,6 +1,8 @@
+%%writefile /content/app.py
 import streamlit as st
 import asyncio
 import pandas as pd
+import numpy as np
 import requests, time, csv, os, json
 from datetime import datetime, timezone, timedelta
 
@@ -15,15 +17,12 @@ ccxt, ta = _load_heavy()
 try:
     import nest_asyncio
     asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed(): loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
-    except RuntimeError:
-        loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     nest_asyncio.apply(loop)
 except: pass
 
-st.set_page_config(page_title="APEX4 // Pump & Dump Scanner", page_icon="🔥", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="APEX4.5 // Pump & Dump Scanner", page_icon="🔥", layout="wide", initial_sidebar_state="expanded")
 
 _SS_DEFAULTS = {
     'results':[], 'last_scan':"—", 'scan_count':0, 'btc_price':0, 'btc_trend':"—",
@@ -35,17 +34,29 @@ _SS_DEFAULTS = {
     'journal_last_autocheck':0, 'prev_results':{}, 'alerted_scores':{},
     'scan_modes':['mixed'], 'fng_last_fetch':0, 'alerted_sigs':set(),
     'last_daily_summary':0, 'nav_state':'🔥 Scanner',
+    'dst_results':[],'dst_last_scan':'-','dst_scan_count':0,
 }
 for k,v in _SS_DEFAULTS.items():
     if k not in st.session_state: st.session_state[k] = v
 
-JOURNAL_FILE="trade_journal.csv"; COOLDOWN_FILE="symbol_cooldowns.json"; SETTINGS_FILE="apex_settings.json"
+JOURNAL_FILE="trade_journal.csv"; COOLDOWN_FILE="symbol_cooldowns.json"; SETTINGS_FILE="apex4.5_settings.json"
 
 DEFAULT_SETTINGS = {
     "scan_depth":40,"scan_modes":["mixed"],"fast_tf":"15m","slow_tf":"4h","min_score":10,
     "j_imminent":True,"j_building":True,"j_early":False,
     "j_filter_classes":["squeeze","breakout","whale_driven","early","god_tier"],
     "j_min_score":25,"j_require_technicals":[],
+    "req_4h_fvg":False,"req_4h_ob":False,"req_5m_align":False,
+    "req_ob":False,"req_whale":False,"req_funding":False,"req_oi":False,
+    "req_volume":False,"req_liq":False,"req_technicals":False,"req_session":False,
+    "req_momentum":False,"req_mtf":False,"req_sentiment":False,"req_social":False,
+    "req_orderflow":False,"req_liq_map":False,"req_onchain":False,
+    "req_wyckoff":False,"req_cvd":False,"req_stophunt":False,
+    "req_rel_strength":False,"req_atr_expansion":False,
+    "kill_switch_on":False,
+    "kill_zones":[{"start":16,"end":19,"label":"Late NY / Asia Transition"}],
+    "rs_btc_filter":False,"rs_btc_min":0.0,
+    "atr_expansion_filter":False,"atr_expansion_mult":1.5,
     "whale_min_usdt":250000,"btc_filter":True,"cooldown_on":True,"cooldown_hrs":4,
     "auto_scan":False,"auto_interval":5,"alert_min_score":60,
     "alert_longs":True,"alert_shorts":True,"alert_squeeze":True,
@@ -79,6 +90,15 @@ DEFAULT_SETTINGS = {
     "orderflow_lookback":10,"pts_liq_map":15,"listing_alert_pts":25,
     "onchain_whale_min":500000,"pts_onchain_whale":15,
     "pts_wyckoff":30,"pts_cvd":20,"pts_stophunt":25,
+    "dst_enabled":True,"dst_dema_len":200,"dst_st_period":10,"dst_st_mult":3.0,
+    "dst_vol_mult":1.2,"dst_rsi_ob":65,"dst_rsi_os":35,"dst_mom_bars":3,
+    "dst_use_vol":True,"dst_use_rsi":True,"dst_use_mom":True,"dst_use_dema_dist":True,
+    "dst_min_dema_dist":0.1,"dst_fresh_bars":5,"dst_sl_atr":1.5,"dst_tp_atr":3.0,
+    "dst_confirm_boost":8,"dst_conflict_penalty":5,
+    "dst_auto_scan":False,"dst_interval":5,"dst_timeframe":"5m","dst_min_rr":1.5,"dst_min_score":3,
+    "dst_watchlist":[],"dst_use_watchlist":False,
+    "dst_use_trail":False,"dst_trail_atr":2.5,"dst_partial":True,
+    "dst_partial_pct":50,"dst_partial_rr":2.0,"dst_breakeven":True,"dst_be_rr":1.5,
     "journal_autocheck_on":True,"journal_autocheck_mins":15,
     "late_entry_chg_thresh":8.0,"late_entry_penalty":20,"vol_exhaust_penalty":15,
     "near_top_penalty":15,"use_4h_ob_for_sl":True,
@@ -140,6 +160,50 @@ def log_trade(res, force=False):
         for req in j_req_tech:
             key = tech_map.get(req)
             if key and bd.get(key, 0) <= 0: return
+
+       # ── Required Technicals (professional filters) ────────────────────
+        if s.get('req_4h_fvg', False):
+            if not any('FVG' in str(r) for r in res.get('reasons', [])): return
+        if s.get('req_4h_ob', False):
+            if bd.get('ob_imbalance', 0) <= 0: return
+        if s.get('req_5m_align', False):
+            if bd.get('mtf', 0) <= 0: return
+        if s.get('req_ob', False):
+            if bd.get('ob_imbalance', 0) <= 0: return
+        if s.get('req_whale', False):
+            if bd.get('whale_wall', 0) <= 0: return
+        if s.get('req_funding', False):
+            if bd.get('funding', 0) <= 0: return
+        if s.get('req_oi', False):
+            if bd.get('oi_spike', 0) <= 0: return
+        if s.get('req_volume', False):
+            if bd.get('vol_surge', 0) <= 0: return
+        if s.get('req_liq', False):
+            if bd.get('liq_cluster', 0) <= 0: return
+        if s.get('req_technicals', False):
+            if bd.get('technicals', 0) <= 0: return
+        if s.get('req_session', False):
+            if bd.get('session', 0) <= 0: return
+        if s.get('req_momentum', False):
+            if bd.get('momentum', 0) <= 0: return
+        if s.get('req_mtf', False):
+            if bd.get('mtf', 0) <= 0: return
+        if s.get('req_sentiment', False):
+            if bd.get('sentiment', 0) <= 0: return
+        if s.get('req_social', False):
+            if bd.get('social_buzz', 0) <= 0: return
+        if s.get('req_orderflow', False):
+            if bd.get('orderflow', 0) <= 0: return
+        if s.get('req_liq_map', False):
+            if bd.get('liq_map', 0) <= 0: return
+        if s.get('req_onchain', False):
+            if bd.get('onchain', 0) <= 0: return
+        if s.get('req_wyckoff', False):
+            if bd.get('wyckoff_spring', 0) <= 0: return
+        if s.get('req_cvd', False):
+            if bd.get('cvd_divergence', 0) <= 0: return
+        if s.get('req_stophunt', False):
+            if bd.get('stop_hunt', 0) <= 0: return
     try:
         ensure_journal()
         with open(JOURNAL_FILE,'a',newline='',encoding='utf-8') as f:
@@ -249,23 +313,23 @@ def check_daily_summary(s):
         tps=len(df24[df24['status']=='TP']); sls=len(df24[df24['status']=='SL'])
         active=len(df24[df24['status']=='ACTIVE'])
         wr=(tps/(tps+sls)*100) if (tps+sls)>0 else 0
-        msg=(f"📊 **APEX4 24h Journal Summary**\n"
+        msg=(f"📊 **APEX4.5 24h Journal Summary**\n"
              f"🕐 {now.strftime('%Y-%m-%d %H:%M UTC')}\n"
              f"━━━━━━━━━━━━━━━━━\n"
              f"Total Signals: **{total}** | 📗 Long: **{longs}** | 📕 Short: **{shorts}**\n"
              f"✅ TP Hits: **{tps}** | 🛑 SL Hits: **{sls}** | 🔄 Active: **{active}**\n"
              f"🎯 Win Rate: **{wr:.1f}%**\n"
              f"━━━━━━━━━━━━━━━━━\n"
-             f"*Powered by APEX4 Intelligence Terminal*")
+             f"*Powered by APEX4.5 Intelligence Terminal*")
         tg_msg=msg.replace("**","<b>").replace("**","</b>")
         if s.get('tg_token') and s.get('tg_chat_id'):
             send_tg(s['tg_token'],s['tg_chat_id'],tg_msg.replace("**","").replace("*",""))
         if s.get('discord_webhook'):
             send_discord(s['discord_webhook'],{
-                "title":"📊 APEX4 24h Journal Summary",
+                "title":"📊 APEX4.5 24h Journal Summary",
                 "color":0x2563eb,
                 "description":msg,
-                "footer":{"text":f"APEX Terminal • {now.strftime('%H:%M UTC')}"}
+                "footer":{"text":f"APEX4.5 Terminal • {now.strftime('%H:%M UTC')}"}
             })
     except: pass
 
@@ -410,7 +474,221 @@ div[data-testid="metric-container"] div[data-testid="metric-value"]{font-family:
 .dual-confirm{background:linear-gradient(135deg,#ff6b0015,#dc262615);border:2px solid #dc2626;border-radius:8px;padding:6px 14px;font-family:monospace;font-size:.7rem;font-weight:700;color:#dc2626;margin:6px 0;text-align:center;}
 </style>""", unsafe_allow_html=True)
 
+# ═══════════════════════════════════════════════════════════════════════════
+# DEMA + SUPERTREND — indicator helpers
+# ═══════════════════════════════════════════════════════════════════════════
 
+def _dst_ema(s, p):
+    return s.ewm(span=p, adjust=False).mean()
+
+def _dst_dema(s, p):
+    e1 = _dst_ema(s, p)
+    return 2 * e1 - _dst_ema(e1, p)
+
+def _dst_rsi(s, p=14):
+    d    = s.diff()
+    gain = d.clip(lower=0).ewm(com=p-1, min_periods=p).mean()
+    loss = (-d.clip(upper=0)).ewm(com=p-1, min_periods=p).mean()
+    return 100 - (100 / (1 + gain / loss))
+
+def _dst_atr(h, l, c, p=14):
+    pc = c.shift(1)
+    tr = pd.concat([h-l, (h-pc).abs(), (l-pc).abs()], axis=1).max(axis=1)
+    return tr.ewm(com=p-1, min_periods=p).mean()
+
+def _dst_supertrend(h, l, c, mult=3.0, period=10):
+    atr_v     = _dst_atr(h, l, c, period)
+    hl2       = (h + l) / 2
+    upper_raw = hl2 + mult * atr_v
+    lower_raw = hl2 - mult * atr_v
+    upper     = upper_raw.copy()
+    lower     = lower_raw.copy()
+    direction = pd.Series(1.0, index=c.index)
+    for i in range(1, len(c)):
+        lower.iloc[i] = lower_raw.iloc[i] if (lower_raw.iloc[i] > lower.iloc[i-1] or c.iloc[i-1] < lower.iloc[i-1]) else lower.iloc[i-1]
+        upper.iloc[i] = upper_raw.iloc[i] if (upper_raw.iloc[i] < upper.iloc[i-1] or c.iloc[i-1] > upper.iloc[i-1]) else upper.iloc[i-1]
+        if   c.iloc[i] > upper.iloc[i-1]: direction.iloc[i] =  1
+        elif c.iloc[i] < lower.iloc[i-1]: direction.iloc[i] = -1
+        else:                              direction.iloc[i] = direction.iloc[i-1]
+    st_line = pd.Series(np.where(direction == 1, lower, upper), index=c.index)
+    return st_line, direction
+
+def check_dst_signal(df, symbol, s=None):
+    if df is None or len(df) < 100:
+        return None
+    if s is None:
+        s = DEFAULT_SETTINGS
+    if not s.get('dst_enabled', True):
+        return None
+    try:
+        c = df["close"]; o = df["open"]
+        h = df["high"];  l = df["low"]
+        v = df["volume"]
+
+        DEMA_LEN   = int(s.get('dst_dema_len',   21))
+        ST_PERIOD  = int(s.get('dst_st_period',  10))
+        ST_MULT    = float(s.get('dst_st_mult',   3.0))
+        RSI_OB     = float(s.get('dst_rsi_ob',   65))
+        RSI_OS     = float(s.get('dst_rsi_os',   35))
+        MOM_BARS   = int(s.get('dst_mom_bars',    3))
+        MIN_DEMA_D = float(s.get('dst_min_dema_dist', 0.1))
+        FRESH_BARS = int(s.get('dst_fresh_bars',  5))
+        SL_ATR     = float(s.get('dst_sl_atr',   1.5))
+        TP_ATR     = float(s.get('dst_tp_atr',   3.0))
+        VOL_MULT   = float(s.get('dst_vol_mult', 1.2))
+
+        dema_line       = _dst_dema(c, DEMA_LEN)
+        st_line, st_dir = _dst_supertrend(h, l, c, ST_MULT, ST_PERIOD)
+        rsi             = _dst_rsi(c, 14)
+        atr             = _dst_atr(h, l, c, 14)
+        vol_ma          = v.rolling(20).mean()
+
+        close_now = float(c.iloc[-1]); open_now  = float(o.iloc[-1])
+        dema_now  = float(dema_line.iloc[-1])
+        dir_now   = float(st_dir.iloc[-1])
+        rsi_now   = float(rsi.iloc[-1])
+        atr_now   = float(atr.iloc[-1])
+        vol_now   = float(v.iloc[-1])
+        volma_now = float(vol_ma.iloc[-1]) if float(vol_ma.iloc[-1]) > 0 else 1
+
+        vol_ok    = (vol_now > volma_now * VOL_MULT) if s.get('dst_use_vol', True) else True
+        rsi_long  = (40 < rsi_now < RSI_OB) if s.get('dst_use_rsi', True) else True
+        rsi_short = (RSI_OS < rsi_now < 60) if s.get('dst_use_rsi', True) else True
+        mom_long  = (close_now > float(c.iloc[-1 - MOM_BARS]) and close_now > open_now) if s.get('dst_use_mom', True) else True
+        mom_short = (close_now < float(c.iloc[-1 - MOM_BARS]) and close_now < open_now) if s.get('dst_use_mom', True) else True
+        dema_ok   = (abs(close_now - dema_now) / close_now * 100 > MIN_DEMA_D) if s.get('dst_use_dema_dist', True) else True
+
+        changed    = st_dir != st_dir.shift(1)
+        bars_since = 999
+        for j in range(1, FRESH_BARS + 2):
+            if len(changed) > j and changed.iloc[-j]:
+                bars_since = j - 1
+                break
+        fresh = bars_since <= FRESH_BARS
+
+        long_sig  = close_now > dema_now and dir_now ==  1 and vol_ok and rsi_long  and mom_long  and dema_ok and fresh
+        short_sig = close_now < dema_now and dir_now == -1 and vol_ok and rsi_short and mom_short and dema_ok and fresh
+
+        if not long_sig and not short_sig:
+            return None
+
+        direction = "LONG" if long_sig else "SHORT"
+        sl  = close_now - SL_ATR * atr_now if long_sig else close_now + SL_ATR * atr_now
+        tp  = close_now + TP_ATR * atr_now if long_sig else close_now - TP_ATR * atr_now
+        rr  = round(abs(tp - close_now) / max(abs(sl - close_now), 0.000001), 2)
+        tp1 = close_now + (tp - close_now) * 0.4 if long_sig else close_now - (close_now - tp) * 0.4
+        tp3 = close_now + (tp - close_now) * 1.5 if long_sig else close_now - (close_now - tp) * 1.5
+
+        return {
+            "strategy":   "DST",
+            "symbol":     symbol,
+            "direction":  direction,
+            "close":      close_now,
+            "sl":         round(sl,  8),
+            "tp":         round(tp,  8),
+            "tp1":        round(tp1, 8),
+            "tp2":        round(tp,  8),
+            "tp3":        round(tp3, 8),
+            "rr":         rr,
+            "rsi":        round(rsi_now,   1),
+            "vol_ratio":  round(vol_now / volma_now, 2),
+            "dema":       round(dema_now,  8),
+            "atr":        round(atr_now,   8),
+            "fresh_bars": bars_since,
+        }
+    except:
+        return None
+        # ═══════════════════════════════════════════════════════════════════════════
+# DST ISOLATED BACKGROUND SCANNER
+# ═══════════════════════════════════════════════════════════════════════════
+
+def run_dst_scan(coin_list, s, exchange_clients):
+    """
+    Fully isolated DEMA+ST scanner. Runs on 5m (or configured TF).
+    If watchlist is enabled — builds its own coin list from watchlist directly.
+    If watchlist is off — uses APEX coin list.
+    """
+    results = []
+    tf = s.get('dst_timeframe', '5m')
+    min_rr = float(s.get('dst_min_rr', 1.5))
+
+    watchlist = s.get('dst_watchlist', [])
+    use_watchlist = s.get('dst_use_watchlist', False)
+
+    if use_watchlist and watchlist:
+        # Build coin list directly from watchlist — independent of APEX
+        coin_list = []
+        for base in watchlist:
+            # Try USDT perp format on gate first, then mexc
+            for ex_id, suffix in [('gate', '/USDT:USDT'), ('mexc', '/USDT:USDT'), ('gate', '/USDT')]:
+                symbol = base + suffix
+                coin_list.append({'symbol': symbol, 'exchange': ex_id})
+
+    for item in coin_list:
+        try:
+            symbol = item if isinstance(item, str) else item.get('symbol', '')
+            exchange_id = item.get('exchange', 'gate') if isinstance(item, dict) else 'gate'
+            if not symbol:
+                continue
+
+            # Get exchange client
+            ex = exchange_clients.get(exchange_id.lower())
+            if ex is None:
+                ex = exchange_clients.get('gate')
+            if ex is None:
+                continue
+
+            # Fetch 5m OHLCV independently
+            raw = asyncio.get_event_loop().run_until_complete(
+                ex.fetch_ohlcv(symbol, tf, limit=250)
+            ) if hasattr(ex, 'fetch_ohlcv') else []
+
+            if not raw or len(raw) < 100:
+                continue
+
+            df = pd.DataFrame(raw, columns=['ts','open','high','low','close','volume'])
+            df = df.astype(float)
+
+            sig = check_dst_signal(df, symbol, s)
+            if sig is None:
+                continue
+            if sig['rr'] < min_rr:
+                continue
+
+            sig['exchange'] = exchange_id.upper()
+            sig['tf'] = tf
+            sig['scan_time'] = datetime.now(timezone.utc).strftime('%H:%M:%S')
+            results.append(sig)
+
+        except:
+            continue
+
+    # Sort by R:R descending
+    results.sort(key=lambda x: x.get('rr', 0), reverse=True)
+    return results
+
+
+def send_dst_discord_alert(webhook_url, sig):
+    """Send isolated DST signal to Discord."""
+    try:
+        color = 0x0284c7  # blue for DST signals
+        direction_emoji = "📗" if sig['direction'] == 'LONG' else "📕"
+        embed = {
+            'title': f'🔵 DEMA+ST | {sig["symbol"]} ({sig["exchange"]}) — {sig["tf"]}',
+            'color': color,
+            'description': (
+                f"{direction_emoji} **{sig['direction']}** | R:R **{sig['rr']}**\n"
+                f"**Entry:** `${sig['close']:.6f}`\n"
+                f"🎯 **TP1:** `${sig['tp1']:.6f}` | **TP2:** `${sig['tp2']:.6f}` | **TP3:** `${sig['tp3']:.6f}`\n"
+                f"🛑 **SL:** `${sig['sl']:.6f}`\n"
+                f"📊 **RSI:** {sig['rsi']} | **VOL:** {sig['vol_ratio']}× avg | **ST Flip:** {sig['fresh_bars']} bars ago\n"
+                f"📐 **DEMA:** `${sig['dema']:.6f}` | **ATR:** `${sig['atr']:.6f}`"
+            ),
+            'footer': {'text': f'APEX — DEMA+ST Scanner • {sig["scan_time"]} UTC'}
+        }
+        requests.post(webhook_url, json={'embeds': [embed]}, timeout=5)
+    except:
+        pass
 # ═══════════════════════════════════════════════════════════════════════════
 # ENGINE
 # ═══════════════════════════════════════════════════════════════════════════
@@ -716,7 +994,7 @@ class PrePumpScreener:
             subs="CryptoCurrency+CryptoMoonShots+SatoshiStreetBets+altcoin+CryptoMarkets"
             rr=requests.get(f"https://www.reddit.com/r/{subs}/search.json",
                 params={"q":sym,"sort":"new","t":"hour","limit":25,"restrict_sr":"1"},
-                headers={"User-Agent":"Mozilla/5.0 APEX/3.0"},timeout=6)
+                headers={"User-Agent":"Mozilla/5.0 APEX4.5/3.0"},timeout=6)
             if rr.status_code==200:
                 posts=rr.json().get('data',{}).get('children',[])
                 if posts:
@@ -1440,7 +1718,61 @@ class PrePumpScreener:
             'breakout_sc_min':s.get('cls_breakout_score_min',25),'squeeze_fund_min':s.get('cls_squeeze_fund_min',8),
             'squeeze_ob_min':s.get('cls_squeeze_ob_min',6),
         }
-        result['cls']=classify(result)
+        # ── ATR Expansion Filter ──────────────────────────────────────────
+        if s.get('atr_expansion_filter', False):
+            try:
+                atr_mult = float(s.get('atr_expansion_mult', 1.5))
+                atr_series = _dst_atr(df_f['high'], df_f['low'], df_f['close'], 14)
+                atr_now = float(atr_series.iloc[-1])
+                atr_24h_avg = float(atr_series.iloc[-288:].mean()) if len(atr_series) >= 288 else float(atr_series.mean())
+                if atr_24h_avg > 0 and atr_now < atr_mult * atr_24h_avg:
+                    result['pump_score'] = 0
+                    result['warnings'].append(f"⚡ ATR expansion filter: current ATR {atr_now:.6f} < {atr_mult}× 24h avg {atr_24h_avg:.6f} — sideways market")
+            except:
+                pass
+
+        # ── Relative Strength vs BTC Filter ──────────────────────────────
+        if s.get('rs_btc_filter', False) and result.get('type') == 'LONG':
+            try:
+                rs_min = float(s.get('rs_btc_min', 0.0))
+                btc_price = st.session_state.get('btc_price', 0)
+                coin_close = float(df_f['close'].iloc[-1])
+                coin_open_1h = float(df_f['close'].iloc[-12]) if len(df_f) >= 12 else coin_close
+                coin_chg_1h = (coin_close - coin_open_1h) / coin_open_1h * 100 if coin_open_1h > 0 else 0
+                btc_chg_1h = st.session_state.get('btc_1h_chg', 0)
+                rs_vs_btc = coin_chg_1h - btc_chg_1h
+                result['signal_breakdown']['rs_btc'] = round(rs_vs_btc, 2)
+                if rs_vs_btc < rs_min:
+                    result['pump_score'] = max(0, result['pump_score'] - 15)
+                    result['warnings'].append(f"📉 RS vs BTC: coin {coin_chg_1h:+.1f}% vs BTC {btc_chg_1h:+.1f}% = RS {rs_vs_btc:+.1f}% (min {rs_min:+.1f}%)")
+            except:
+                pass
+        result['cls'] = classify(result)
+
+        # ── DEMA + SuperTrend cross-check ─────────────────────────────────
+        dst = check_dst_signal(df_f, dsym, s)
+        result['dst_signal'] = dst
+
+        if dst and dst['direction'] == sig:
+            boost = int(s.get('dst_confirm_boost', 8))
+            result['dst_confirmed'] = True
+            result['pump_score'] = min(100, result['pump_score'] + boost)
+            result['reasons'].insert(0,
+                f"🔵 DEMA+ST CONFIRMED: Both APEX + DEMA/SuperTrend agree {sig} "
+                f"| DEMA dist {abs(dst['close']-dst['dema'])/dst['close']*100:.2f}% "
+                f"| ST flipped {dst['fresh_bars']} bars ago | R:R {dst['rr']}")
+            result['signal_breakdown']['dst_boost'] = boost
+        elif dst and dst['direction'] != sig:
+            penalty = int(s.get('dst_conflict_penalty', 5))
+            result['dst_confirmed'] = False
+            result['pump_score'] = max(0, result['pump_score'] - penalty)
+            result['warnings'].append(
+                f"⚠️ DEMA+ST conflict: APEX says {sig} but DEMA/SuperTrend says {dst['direction']}")
+            result['signal_breakdown']['dst_boost'] = -penalty
+        else:
+            result['dst_confirmed'] = False
+            result['signal_breakdown']['dst_boost'] = 0
+
         if s['cooldown_on']: set_cooldown(dsym)
         return result
 
@@ -1681,6 +2013,18 @@ def render_card(res, is_sniper=False, dual_confirmed=False):
     <div class="pip-item">{pip(bd.get('liq_map',0),7,15)} LIQ-MAP</div>
     <div class="pip-item">{pip(bd.get('listing',0),6,25)} LISTING</div>
     <div class="pip-item">{pip(max(0,bd.get('onchain',0)),7,15)} ONCHAIN</div>
+    <div class="pip-item">{pip(max(0,bd.get('dst_boost',0)),5,8)} DEMA+ST</div>
+  </div>
+  {f'''<div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:6px 10px;margin:4px 0;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+    <span style="font-family:monospace;font-size:.55rem;font-weight:700;color:#0284c7;">🔵 DEMA+ST</span>
+    <span style="font-family:monospace;font-size:.55rem;background:{"#dcfce7" if r.get("dst_confirmed") else "#fef2f2"};color:{"#16a34a" if r.get("dst_confirmed") else "#dc2626"};padding:1px 6px;border-radius:3px;">{"✅ CONFIRMED" if r.get("dst_confirmed") else "❌ NO SIGNAL"}</span>
+    <span style="font-family:monospace;font-size:.55rem;color:#64748b;">DIR: {"🟢 " + r["dst_signal"]["direction"] if r.get("dst_signal") else "–"}</span>
+    <span style="font-family:monospace;font-size:.55rem;color:#64748b;">RSI: {str(round(r["dst_signal"]["rsi"],1)) if r.get("dst_signal") else "–"}</span>
+    <span style="font-family:monospace;font-size:.55rem;color:#64748b;">VOL: {str(r["dst_signal"]["vol_ratio"])+"×" if r.get("dst_signal") else "–"}</span>
+    <span style="font-family:monospace;font-size:.55rem;color:#64748b;">ST FLIP: {str(r["dst_signal"]["fresh_bars"])+" bars ago" if r.get("dst_signal") else "–"}</span>
+    <span style="font-family:monospace;font-size:.55rem;color:#64748b;">R:R {str(r["dst_signal"]["rr"]) if r.get("dst_signal") else "–"}</span>
+  </div>''' if r.get("dst_signal") or r.get("dst_confirmed") is not None else
+  '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:5px 10px;margin:4px 0;"><span style="font-family:monospace;font-size:.55rem;color:#94a3b8;">🔵 DEMA+ST — no signal this candle</span></div>'}
   </div>
   <div style="display:flex;height:5px;border-radius:3px;overflow:hidden;margin:6px 0;background:var(--panel);">
     <div style="width:{bid_pct:.0f}%;background:var(--green);"></div>
@@ -1720,7 +2064,7 @@ def render_card(res, is_sniper=False, dual_confirmed=False):
 
 # ─── SIDEBAR ─────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.title("⚡ APEX4")
+    st.title("⚡ APEX4.5")
     st.caption("Pump & Dump Intelligence")
     # FIX: Use session state for nav to prevent journal→scanner glitch
     nav_options=["🔥 Scanner","⚙️ Settings","📒 Journal","📊 Backtest"]
@@ -1732,7 +2076,7 @@ with st.sidebar:
     st.divider()
     st.subheader("Quick Controls")
     q_depth=st.slider("Coins to Scan",10,100,S['scan_depth'],step=10,key="q_depth")
-    q_min=st.slider("Min Score",1,80,S['min_score'],key="q_min")
+    q_min=st.slider("Min Score",1,100,S['min_score'],key="q_min")
     q_btc=st.toggle("BTC Bear blocks LONGs",S['btc_filter'],key="q_btc")
     q_mom=st.toggle("Require Momentum",S.get('require_momentum',False),key="q_mom")
     st.caption("Scan Focus (select multiple):")
@@ -1764,7 +2108,7 @@ with st.sidebar:
 
 
 # ─── HEADER / TICKER ─────────────────────────────────────────────────────────
-st.markdown('<div style="padding:18px 0 14px;"><div style="font-family:monospace;font-size:1.5rem;font-weight:700;color:#0f1117;">APEX4</div><div style="font-family:monospace;font-size:.56rem;font-weight:400;letter-spacing:.16em;color:#7a82a0;text-transform:uppercase;margin-top:2px;">Pump & Dump Intelligence Terminal v3.0 — Dual Confirm + FVG + Backtest</div></div>',unsafe_allow_html=True)
+st.markdown('<div style="padding:18px 0 14px;"><div style="font-family:monospace;font-size:1.5rem;font-weight:700;color:#0f1117;">APEX4.5</div><div style="font-family:monospace;font-size:.56rem;font-weight:400;letter-spacing:.16em;color:#7a82a0;text-transform:uppercase;margin-top:2px;">Pump & Dump Intelligence Terminal v3.0 — Dual Confirm + FVG + Backtest</div></div>',unsafe_allow_html=True)
 
 if time.time()-st.session_state.get('fng_last_fetch',0)>300:
     try:
@@ -1824,7 +2168,7 @@ if nav=="⚙️ Settings":
             ns_j_cls=st.multiselect("Classes",j_cls_opts,default=saved_j_cls,key="j_cls_ms")
             st.markdown('<div class="setting-help">Only signals matching these classes will be saved to journal</div>',unsafe_allow_html=True)
         with jf2:
-            ns_j_min_sc=st.slider("Min score to journal",1,80,int(S.get('j_min_score',25)))
+            ns_j_min_sc=st.slider("Min score to journal",1,100,int(S.get('j_min_score',25)))
             st.markdown('<div class="setting-help">Signals below this score won\'t be journaled regardless of class</div>',unsafe_allow_html=True)
         with jf3:
             st.markdown("**Required Technicals (ALL must be present):**")
@@ -1859,19 +2203,19 @@ if nav=="⚙️ Settings":
         # ── FILTERS ───────────────────────────────────────────────────────
         st.markdown('<div class="stg-card"><div class="stg-title">🎯 Core Filters</div>',unsafe_allow_html=True)
         c1,c2,c3,c4,c5,c6=st.columns(6)
-        with c1: ns_min=st.slider("Min score to show",1,80,S['min_score'])
+        with c1: ns_min=st.slider("Min score to show",1,100,S['min_score'])
         with c2:
             ns_ji=st.checkbox("Log IMMINENT (70+)",S.get('j_imminent',True))
             ns_jb=st.checkbox("Log BUILDING (45+)",S.get('j_building',True))
             ns_je=st.checkbox("Log EARLY (25+)",S.get('j_early',False))
         with c3:
-            ns_minr=st.slider("Min signals",1,6,S.get('min_reasons',1))
+            ns_minr=st.slider("Min signals",1,10,S.get('min_reasons',1))
         with c4:
             ns_btc=st.toggle("BTC Bear block",S['btc_filter'])
             ns_mom=st.toggle("Require momentum",S.get('require_momentum',False))
         with c5:
-            ns_cd=st.toggle("Symbol cooldown",S['cooldown_on'])
-            ns_cdh=st.slider("Cooldown hrs",1,24,S['cooldown_hrs']) if ns_cd else S['cooldown_hrs']
+            ns_cd=False
+            ns_cdh=0
         with c6:
             ns_min_rr=st.slider("Min R:R",1.0,4.0,float(S.get('min_rr',1.5)),step=0.1)
         st.markdown('</div>',unsafe_allow_html=True)
@@ -1928,7 +2272,7 @@ if nav=="⚙️ Settings":
         st.markdown('<div class="stg-card" style="border-color:#059669;"><div class="stg-title" style="color:#059669;">🎯 Accuracy + Intelligence Signals</div>',unsafe_allow_html=True)
         af1,af2,af3=st.columns(3)
         with af1:
-            ns_min_vol=st.number_input("Min 24h vol $",0,5000000,int(S.get('min_vol_filter',300000)),50000,format="%d")
+            ns_min_vol=st.number_input("Min 24h vol $",0,100000000,int(S.get('min_vol_filter',300000)),100000,format="%d")
             ns_min_sigs=st.slider("Min signal cats",1,6,int(S.get('min_active_signals',3)))
             ns_dedup=st.toggle("Dedup coins",S.get('dedup_symbols',True))
             ns_atr_min=st.number_input("ATR min %",0.0,2.0,float(S.get('atr_min_pct',0.2)),0.05,format="%.2f")
@@ -1949,7 +2293,7 @@ if nav=="⚙️ Settings":
             ns_pts_of=st.slider("Order flow pts",3,20,int(S.get('pts_orderflow',12)))
             ns_pts_lm=st.slider("Liq map pts",3,25,int(S.get('pts_liq_map',15)))
             ns_pts_lst=st.slider("New listing pts",5,35,int(S.get('listing_alert_pts',25)))
-            ns_oc_min=st.number_input("On-chain whale min $",100000,5000000,int(S.get('onchain_whale_min',500000)),100000,format="%d")
+            ns_oc_min=st.number_input("On-chain whale min $",100000,100000000,int(S.get('onchain_whale_min',500000)),100000,format="%d")
             ns_pts_oc=st.slider("On-chain pts",3,25,int(S.get('pts_onchain_whale',15)))
         st.markdown('</div>',unsafe_allow_html=True)
 
@@ -1996,6 +2340,167 @@ if nav=="⚙️ Settings":
         with so4: ns_social_buzz=st.slider("Mentions for max pts",5,50,int(S.get('social_buzz_threshold',10)))
         ns_apify=st.text_input("Apify Token (optional)",S.get('apify_token',''),type="password")
         st.markdown('</div>',unsafe_allow_html=True)
+        # ── DEMA + SUPERTREND ─────────────────────────────────────────────
+        st.markdown('<div class="stg-card" style="border-color:#0284c7;"><div class="stg-title" style="color:#0284c7;">🔵 DEMA + SuperTrend Strategy</div>', unsafe_allow_html=True)
+        st.markdown('<div class="hint">Runs alongside APEX on every scan. When both strategies agree → score boost. When they conflict → small penalty. Disable to skip entirely.</div>', unsafe_allow_html=True)
+        dst_c1, dst_c2, dst_c3, dst_c4 = st.columns(4)
+        with dst_c1:
+            st.markdown("**Core**")
+            ns_dst_enabled   = st.toggle("Enable DEMA+ST", S.get('dst_enabled', True))
+            ns_dst_dema_len  = st.slider("DEMA Length", 5, 500, int(S.get('dst_dema_len', 200)))
+            st.markdown('<div class="setting-help">200 = slow trend filter (recommended). Lower = faster but more noise.</div>', unsafe_allow_html=True)
+            ns_dst_st_period = st.slider("ST ATR Period", 5, 30, int(S.get('dst_st_period', 10)))
+            ns_dst_st_mult   = st.number_input("ST Multiplier", 1.0, 6.0, float(S.get('dst_st_mult', 3.0)), 0.25, format="%.2f")
+            st.markdown('<div class="setting-help">Higher multiplier = fewer but stronger ST flips</div>', unsafe_allow_html=True)
+            st.markdown("**Risk Management**")
+            ns_dst_use_trail = st.toggle("Use Trailing Stop", S.get('dst_use_trail', False))
+            ns_dst_trail_atr = st.number_input("Trail Stop ATR ×", 0.5, 5.0, float(S.get('dst_trail_atr', 2.5)), 0.25, format="%.2f")
+            st.markdown("**Profit Management**")
+            ns_dst_partial   = st.toggle("Partial Profit Taking", S.get('dst_partial', True))
+            ns_dst_partial_pct = st.number_input("Partial Exit %", 10, 90, int(S.get('dst_partial_pct', 50)))
+            ns_dst_partial_rr  = st.number_input("Partial Exit at R:R", 0.5, 5.0, float(S.get('dst_partial_rr', 2.0)), 0.25, format="%.2f")
+            ns_dst_breakeven   = st.toggle("Move Stop to Breakeven", S.get('dst_breakeven', True))
+            ns_dst_be_rr       = st.number_input("Breakeven at R:R", 0.5, 3.0, float(S.get('dst_be_rr', 1.5)), 0.25, format="%.2f")
+        with dst_c2:
+            st.markdown("**Filters**")
+            ns_dst_use_vol   = st.toggle("Use Volume Filter",   S.get('dst_use_vol',   True))
+            ns_dst_vol_mult  = st.number_input("Min Volume ×avg", 1.0, 3.0, float(S.get('dst_vol_mult', 1.2)), 0.1, format="%.1f")
+            ns_dst_use_rsi   = st.toggle("Use RSI Filter",      S.get('dst_use_rsi',   True))
+            ns_dst_rsi_ob    = st.slider("RSI Overbought", 55, 80, int(S.get('dst_rsi_ob', 65)))
+            ns_dst_rsi_os    = st.slider("RSI Oversold", 20, 45, int(S.get('dst_rsi_os', 35)))
+            ns_dst_use_mom   = st.toggle("Use Momentum Filter", S.get('dst_use_mom',   True))
+            ns_dst_mom_bars  = st.slider("Momentum Bars", 1, 10, int(S.get('dst_mom_bars', 3)))
+            ns_dst_use_dema_dist = st.toggle("Use DEMA Distance Filter", S.get('dst_use_dema_dist', True))
+            ns_dst_min_dema_dist = st.number_input("Min DEMA Dist %", 0.0, 2.0, float(S.get('dst_min_dema_dist', 0.1)), 0.05, format="%.2f")
+            st.markdown('<div class="setting-help">Toggle each filter on/off independently</div>', unsafe_allow_html=True)
+        with dst_c3:
+            st.markdown("**Freshness & TP/SL**")
+            ns_dst_fresh_bars = st.slider("Max bars since ST flip", 1, 20, int(S.get('dst_fresh_bars', 5)))
+            st.markdown('<div class="setting-help">Only fires if ST flipped within this many candles</div>', unsafe_allow_html=True)
+            ns_dst_sl_atr = st.number_input("SL ATR ×", 0.5, 4.0, float(S.get('dst_sl_atr', 1.5)), 0.25, format="%.2f")
+            ns_dst_timeframe = st.selectbox("Timeframe", ["1m","3m","5m","15m","30m","1h","4h"], index=["1m","3m","5m","15m","30m","1h","4h"].index(S.get('dst_timeframe','5m')))
+            ns_dst_tp_atr = st.number_input("TP ATR ×", 1.0, 8.0, float(S.get('dst_tp_atr', 3.0)), 0.25, format="%.2f")
+            st.markdown('<div class="setting-help">DST TP/SL shown in confirm reason only. APEX TP/SL is unchanged.</div>', unsafe_allow_html=True)
+        with dst_c4:
+            st.markdown("**Scoring**")
+            ns_dst_boost   = st.slider("Boost when confirmed", 0, 20, int(S.get('dst_confirm_boost', 8)))
+            ns_dst_penalty = st.slider("Penalty when conflicting", 0, 15, int(S.get('dst_conflict_penalty', 5)))
+            st.markdown('<div class="setting-help"><b>Confirmed:</b> both agree → +boost pts<br><b>Conflict:</b> disagree → −penalty pts<br>Set penalty to 0 to ignore conflicts</div>', unsafe_allow_html=True)
+            dst_col = "#0284c7" if S.get('dst_enabled', True) else "#9ca3af"
+            dst_txt = "🟢 DEMA+ST ACTIVE on every scan" if S.get('dst_enabled', True) else "⚫ DEMA+ST DISABLED"
+            st.markdown(f'<div style="background:#eff6ff;border-left:4px solid {dst_col};border-radius:6px;padding:8px 12px;font-family:monospace;font-size:.65rem;color:{dst_col};margin-top:8px;">{dst_txt}</div>', unsafe_allow_html=True)
+            st.markdown("---")
+        st.markdown("**🎯 DST Watchlist**")
+        ns_dst_use_watchlist = st.toggle("Scan watchlist only", S.get('dst_use_watchlist', False))
+        st.markdown('<div class="setting-help">When ON — only scans coins below. When OFF — scans all APEX coins.</div>', unsafe_allow_html=True)
+
+        TOP_100_FUTURES = [
+            "BTC","ETH","SOL","BNB","XRP","DOGE","ADA","AVAX","LINK","DOT",
+            "MATIC","UNI","ATOM","LTC","BCH","APT","OP","ARB","INJ","SUI",
+            "TIA","SEI","PEPE","WIF","BONK","FLOKI","SHIB","FTM","NEAR","ALGO",
+            "VET","FIL","SAND","MANA","AXS","GALA","ENJ","CHZ","FLOW","ICP",
+            "EGLD","XLM","HBAR","EOS","TRX","XMR","ZEC","DASH","NEO","WAVES",
+            "KAVA","BAND","CELO","ZIL","ONE","ANKR","CRV","SNX","COMP","AAVE",
+            "MKR","YFI","SUSHI","1INCH","BAL","REN","UMA","ZRX","LRC","DYDX",
+            "GMX","GNS","PERP","BLUR","APE","LOOKS","IMX","GODS","BEAM","MAGIC",
+            "RUNE","LUNA","OSMO","JUNO","SCRT","ROWAN","AKT","STARS","EVMOS","CRO",
+            "OKB","HT","KCS","GT","MX","WOO","DODO","RDNT","STG","PENDLE"
+        ]
+        TOP_100_FUTURES.sort()
+        ns_dst_watchlist = st.multiselect(
+            "Select coins to watch (saved on Submit)",
+            options=TOP_100_FUTURES,
+            default=[c for c in S.get('dst_watchlist', []) if c in TOP_100_FUTURES],
+            key='dst_wl_multiselect'
+        )
+        if ns_dst_watchlist:
+            st.markdown(f'<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:6px 10px;font-family:monospace;font-size:.6rem;color:#0284c7;margin:4px 0;">👁 Watching {len(ns_dst_watchlist)} coins: {", ".join(ns_dst_watchlist)}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div style="font-family:monospace;font-size:.6rem;color:#94a3b8;">No coins selected — DST will scan all APEX coins</div>', unsafe_allow_html=True)
+
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        # ── PROFESSIONAL FILTERS ──────────────────────────────────────────
+        st.markdown('<div class="stg-card" style="border-color:#7c3aed;"><div class="stg-title" style="color:#7c3aed;">⚡ Professional Filters</div>', unsafe_allow_html=True)
+        st.markdown('<div class="hint">Advanced filters used by professional traders to eliminate low-quality signals.</div>', unsafe_allow_html=True)
+
+        pf_c1, pf_c2, pf_c3 = st.columns(3)
+
+        with pf_c1:
+            st.markdown("**🕐 Kill-Switch (Time Filter)**")
+            ns_ks_on = st.toggle("Enable Kill-Switch", S.get('kill_switch_on', False))
+            st.markdown('<div class="setting-help">No alerts during these UTC hours. Add up to 3 kill zones.</div>', unsafe_allow_html=True)
+            current_h = datetime.now(timezone.utc).hour
+            existing_zones = S.get('kill_zones', [{"start":16,"end":19,"label":"Late NY","active":True}])
+            ns_kill_zones = []
+            defaults = [{"start":16,"end":19,"label":"Late NY / Asia Transition"},
+                        {"start":0,"end":4,"label":"Asia Dead Hours"},
+                        {"start":12,"end":14,"label":"London Lunch"}]
+            for i in range(3):
+                zone = existing_zones[i] if i < len(existing_zones) else defaults[i]
+                st.markdown(f"**Zone {i+1}**")
+                zc1, zc2 = st.columns(2)
+                with zc1:
+                    zs = st.slider(f"From (UTC)", 0, 23, int(zone.get('start', defaults[i]['start'])), key=f'ks_zone_{i}_start')
+                with zc2:
+                    ze = st.slider(f"Until (UTC)", 0, 23, int(zone.get('end', defaults[i]['end'])), key=f'ks_zone_{i}_end')
+                zc3, zc4 = st.columns([3,1])
+                with zc3:
+                    zl = st.text_input(f"Label", value=zone.get('label', defaults[i]['label']), key=f'ks_zone_{i}_label')
+                with zc4:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    za = st.checkbox("On", value=zone.get('active', i==0), key=f'ks_zone_{i}_active')
+                if za:
+                    ns_kill_zones.append({"start":zs,"end":ze,"label":zl,"active":True})
+                    if ns_ks_on:
+                        in_kz = zs <= current_h < ze
+                        kz_color = "#dc2626" if in_kz else "#059669"
+                        kz_txt = f"🔴 ACTIVE" if in_kz else f"🟢 outside"
+                        st.markdown(f'<div style="border-left:3px solid {kz_color};padding:3px 8px;font-family:monospace;font-size:.58rem;color:{kz_color};">{kz_txt}</div>', unsafe_allow_html=True)
+                else:
+                    ns_kill_zones.append({"start":zs,"end":ze,"label":zl,"active":False})
+            ns_ks_start = ns_kill_zones[0]['start'] if ns_kill_zones else 16
+            ns_ks_end = ns_kill_zones[0]['end'] if ns_kill_zones else 19
+
+        with pf_c2:
+            st.markdown("**📊 Required Technicals**")
+            st.markdown('<div class="setting-help">When ON — coin MUST have this score > 0 to signal.</div>', unsafe_allow_html=True)
+            rt_c1, rt_c2 = st.columns(2)
+            with rt_c1:
+                ns_req_4h_fvg   = st.toggle("4H FVG",        S.get('req_4h_fvg',      False))
+                ns_req_4h_ob    = st.toggle("4H OB",         S.get('req_4h_ob',       False))
+                ns_req_5m_align = st.toggle("5m Alignment",  S.get('req_5m_align',    False))
+                ns_req_ob       = st.toggle("OB Imbalance",  S.get('req_ob',          False))
+                ns_req_whale    = st.toggle("Whale Wall",    S.get('req_whale',       False))
+                ns_req_funding  = st.toggle("Funding",       S.get('req_funding',     False))
+                ns_req_oi       = st.toggle("OI Spike",      S.get('req_oi',          False))
+                ns_req_volume   = st.toggle("Volume Surge",  S.get('req_volume',      False))
+                ns_req_liq      = st.toggle("Liq Cluster",   S.get('req_liq',         False))
+            with rt_c2:
+                ns_req_mtf      = st.toggle("MTF Align",     S.get('req_mtf',         False))
+                ns_req_momentum = st.toggle("Momentum",      S.get('req_momentum',    False))
+                ns_req_sentiment= st.toggle("Sentiment",     S.get('req_sentiment',   False))
+                ns_req_social   = st.toggle("Social Buzz",   S.get('req_social',      False))
+                ns_req_orderflow= st.toggle("Order Flow",    S.get('req_orderflow',   False))
+                ns_req_liq_map  = st.toggle("Liq Map",       S.get('req_liq_map',     False))
+                ns_req_onchain  = st.toggle("On-Chain",      S.get('req_onchain',     False))
+                ns_req_wyckoff  = st.toggle("Wyckoff Spring",S.get('req_wyckoff',     False))
+                ns_req_cvd      = st.toggle("CVD Divergence",S.get('req_cvd',         False))
+                ns_req_stophunt = st.toggle("Stop Hunt",     S.get('req_stophunt',    False))
+            ns_req_technicals = st.toggle("Technicals Score",S.get('req_technicals',  False))
+            ns_req_session    = st.toggle("Session Score",   S.get('req_session',     False))
+            st.markdown('<div class="setting-help">SMC setup = enable 4H FVG + 4H OB + MTF. Reduces signals 70-80% but higher conviction.</div>', unsafe_allow_html=True)
+
+        with pf_c3:
+            st.markdown("**🔬 Market Condition Filters**")
+            ns_rs_btc       = st.toggle("Relative Strength vs BTC", S.get('rs_btc_filter', False))
+            ns_rs_btc_min   = st.number_input("Min RS vs BTC (1H)", -10.0, 10.0, float(S.get('rs_btc_min', 0.0)), 0.5, format="%.1f")
+            st.markdown('<div class="setting-help">Only LONG if coin outperforming BTC by this % on 1H.</div>', unsafe_allow_html=True)
+            ns_atr_exp      = st.toggle("ATR Expansion Filter",     S.get('atr_expansion_filter', False))
+            ns_atr_exp_mult = st.number_input("ATR Expansion ×24h avg", 1.0, 5.0, float(S.get('atr_expansion_mult', 1.5)), 0.25, format="%.2f")
+            st.markdown('<div class="setting-help">Only signal if current ATR is this × above 24h average. Avoids sideways grind markets.</div>', unsafe_allow_html=True)
+
+        st.markdown('</div>', unsafe_allow_html=True)
 
         # ── BACKTEST ──────────────────────────────────────────────────────
         st.markdown('<div class="stg-card"><div class="stg-title">📊 Backtest Defaults</div>',unsafe_allow_html=True)
@@ -2062,6 +2567,31 @@ if nav=="⚙️ Settings":
                 'social_enabled':ns_social_en,'social_reddit_weight':ns_social_wt,
                 'social_min_mentions':ns_social_min,'social_buzz_threshold':ns_social_buzz,'apify_token':ns_apify,
                 'backtest_min_score':ns_bt_min_sc,'backtest_days':ns_bt_days,
+                'dst_enabled':ns_dst_enabled,'dst_dema_len':ns_dst_dema_len,
+                'dst_st_period':ns_dst_st_period,'dst_st_mult':ns_dst_st_mult,
+                'dst_use_vol':ns_dst_use_vol,'dst_vol_mult':ns_dst_vol_mult,'dst_use_rsi':ns_dst_use_rsi,
+                'dst_rsi_ob':ns_dst_rsi_ob,'dst_rsi_os':ns_dst_rsi_os,'dst_use_mom':ns_dst_use_mom,
+                'dst_mom_bars':ns_dst_mom_bars,'dst_use_dema_dist':ns_dst_use_dema_dist,
+                'dst_min_dema_dist':ns_dst_min_dema_dist,
+                'dst_rsi_os':ns_dst_rsi_os,'dst_mom_bars':ns_dst_mom_bars,
+                'dst_min_dema_dist':ns_dst_min_dema_dist,'dst_fresh_bars':ns_dst_fresh_bars,
+                'dst_sl_atr':ns_dst_sl_atr,'dst_tp_atr':ns_dst_tp_atr,
+                'dst_confirm_boost':ns_dst_boost,'dst_conflict_penalty':ns_dst_penalty,
+                'kill_switch_on':ns_ks_on,'kill_zones':ns_kill_zones,'kill_switch_start':ns_ks_start,'kill_switch_end':ns_ks_end,
+                'req_4h_fvg':ns_req_4h_fvg,'req_4h_ob':ns_req_4h_ob,'req_5m_align':ns_req_5m_align,
+                'req_ob':ns_req_ob,'req_whale':ns_req_whale,'req_funding':ns_req_funding,
+                'req_oi':ns_req_oi,'req_volume':ns_req_volume,'req_liq':ns_req_liq,
+                'req_technicals':ns_req_technicals,'req_session':ns_req_session,
+                'req_momentum':ns_req_momentum,'req_mtf':ns_req_mtf,'req_sentiment':ns_req_sentiment,
+                'req_social':ns_req_social,'req_orderflow':ns_req_orderflow,'req_liq_map':ns_req_liq_map,
+                'req_onchain':ns_req_onchain,'req_wyckoff':ns_req_wyckoff,'req_cvd':ns_req_cvd,
+                'req_stophunt':ns_req_stophunt,
+                'rs_btc_filter':ns_rs_btc,'rs_btc_min':ns_rs_btc_min,
+                'atr_expansion_filter':ns_atr_exp,'atr_expansion_mult':ns_atr_exp_mult,
+                'dst_timeframe':ns_dst_timeframe,'dst_use_watchlist':ns_dst_use_watchlist,'dst_watchlist':ns_dst_watchlist,
+                'dst_use_trail':ns_dst_use_trail,'dst_trail_atr':ns_dst_trail_atr,
+                'dst_partial':ns_dst_partial,'dst_partial_pct':ns_dst_partial_pct,
+                'dst_partial_rr':ns_dst_partial_rr,'dst_breakeven':ns_dst_breakeven,'dst_be_rr':ns_dst_be_rr,
                 'cmc_key':ns_cmc,'tg_token':ns_tg_tok,'tg_chat_id':ns_tg_cid,'discord_webhook':ns_dc_web,
                 'okx_key':ns_okx_key,'okx_secret':ns_okx_sec,'okx_passphrase':ns_okx_pass,
                 'gate_key':ns_gate_key,'gate_secret':ns_gate_sec,
@@ -2120,7 +2650,7 @@ if nav=="📒 Journal":
         if js in dv.columns: dv=dv.sort_values(js,ascending=(js!='pump_score'))
         st.dataframe(dv,use_container_width=True,height=500)
         st.download_button("⬇️ Export CSV",dv.to_csv(index=False).encode(),
-            file_name=f"apex4_{datetime.now().strftime('%Y%m%d')}.csv",mime="text/csv")
+            file_name=f"apex4.5_{datetime.now().strftime('%Y%m%d')}.csv",mime="text/csv")
     st.stop()
 
 
@@ -2341,7 +2871,7 @@ if nav=="📊 Backtest":
             st.download_button(
                 "⬇️ Export External Backtest CSV",
                 df_ext_res.to_csv(index=False).encode(),
-                file_name=f"apex4_external_backtest_{datetime.now().strftime('%Y%m%d')}.csv",
+                file_name=f"apex4.5_external_backtest_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv")
 
         st.stop()
@@ -2561,7 +3091,7 @@ if nav=="📊 Backtest":
         st.download_button(
             "⬇️ Export Full Backtest CSV",
             df_res.to_csv(index=False).encode(),
-            file_name=f"apex4_backtest_{datetime.now().strftime('%Y%m%d')}.csv",
+            file_name=f"apex4.5_backtest_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv")
 
     st.stop()
@@ -2588,11 +3118,19 @@ if do_scan:
             gate_key=eff_s.get('gate_key',''),gate_secret=eff_s.get('gate_secret',''))
         raw_results,btc_t,btc_p,btc_r,scan_errs=asyncio.run(screener.run(eff_s))
         st.session_state.last_raw_count=len(raw_results)
+        st.session_state['last_coin_list']=[{'symbol':r['symbol'],'exchange':r.get('exchange','gate').lower()} for r in raw_results]
         st.session_state.prev_results={f"{r['symbol']}_{r['type']}":r['pump_score'] for r in st.session_state.results}
         st.session_state.results=[r for r in raw_results if r['pump_score']>=eff_s['min_score']]
         st.session_state.last_scan=datetime.now().strftime('%H:%M:%S')
         st.session_state.scan_count+=1
         st.session_state.btc_price=btc_p; st.session_state.btc_trend=btc_t
+        try:
+            _btc_1h = (btc_p - st.session_state.get('btc_price_prev_1h', btc_p)) / max(st.session_state.get('btc_price_prev_1h', btc_p), 1) * 100
+            st.session_state['btc_1h_chg'] = round(_btc_1h, 2)
+            if st.session_state.get('btc_price_prev_1h', 0) == 0:
+                st.session_state['btc_price_prev_1h'] = btc_p
+        except:
+            st.session_state['btc_1h_chg'] = 0
         st.session_state.scan_errors=scan_errs
 
         # ── DUAL CONFIRM: mark coins flagged by both scanner + sentinel ───
@@ -2624,6 +3162,23 @@ if do_scan:
 
             # ── NOTIFICATION CHECK ────────────────────────────────────────
             send_alert=False
+            # ── Kill-Switch time filter ───────────────────────────────────
+            current_utc_hour = datetime.now(timezone.utc).hour
+            ks_on = eff_s.get('kill_switch_on', False)
+            if ks_on:
+                kill_zones = eff_s.get('kill_zones', [{"start":16,"end":19}])
+                in_kill_zone = False
+                for kz in kill_zones:
+                    ks = int(kz.get('start', 16))
+                    ke = int(kz.get('end', 19))
+                    if ks <= ke:
+                        if ks <= current_utc_hour < ke:
+                            in_kill_zone = True; break
+                    else:
+                        if current_utc_hour >= ks or current_utc_hour < ke:
+                            in_kill_zone = True; break
+                if in_kill_zone:
+                    continue
             if r['pump_score']>=eff_s.get('alert_min_score',60):
                 type_ok=(r['type']=='LONG' and eff_s.get('alert_longs',True)) or (r['type']=='SHORT' and eff_s.get('alert_shorts',True))
                 cls_ok=((r['cls']=='squeeze' and eff_s.get('alert_squeeze',True)) or
@@ -2677,11 +3232,22 @@ if do_scan:
                     if eff_s.get('discord_webhook'):
                         dc_color=0x059669 if r['type']=='LONG' else 0xdc2626
                         sig_hdr=("📗 **LONG**" if r['type']=='LONG' else "📕 **SHORT**")+f" | Score: **{r['pump_score']}/100**"
+                        _dst = r.get('dst_signal')
+                        _dst_confirmed = r.get('dst_confirmed', False)
+                        if _dst_confirmed and _dst:
+                            dst_line = (f"\n🔵 **DEMA+ST CONFIRMED** ✅ | DIR: {_dst['direction']} | RSI: {_dst['rsi']} | VOL: {_dst['vol_ratio']}× | ST flip: {_dst['fresh_bars']} bars ago | R:R {_dst['rr']}")
+                        elif _dst and not _dst_confirmed:
+                            dst_line = (f"\n🔵 **DEMA+ST CONFLICT** ⚠️ | DEMA+ST says {_dst['direction']} (opposite to APEX)")
+                        elif not _dst:
+                            dst_line = "\n🔵 **DEMA+ST** — no signal this candle"
+                        else:
+                            dst_line = ""
                         stats_text=(f"{dual_line}\n{sig_hdr}\n"
                                     f"**Exchange:** {r.get('exchange','MEXC')} | **RSI:** {r.get('rsi',0):.1f}{rsi_arrow} | **R:R:** {rr_ratio}\n"
                                     f"📍 **Entry Zone:** `${_elo:.6f}`–`${_ehi:.6f}`\n"
                                     f"🎯 **TP1:** `${_tp1:.6f}` | **TP2:** `${_tp2:.6f}` | **TP3:** `${_tp3:.6f}`\n"
                                     f"🛑 **SL:** `${_s_:.6f}`"
+                                    +dst_line
                                     +(f"\n**OI 6h:** {oi_ch:+.1f}%" if abs(oi_ch)>=5 else "")
                                     +(f"\n{sentiment.get('source','')} L/S: {sentiment['top_long_pct']:.0f}% / {sentiment['top_short_pct']:.0f}% | Taker: {sentiment['taker_buy_pct']:.0f}%" if sentiment.get('available') else "")
                                     +(f"\n⚠️ "+' | '.join(r.get('warnings',[])) if r.get('warnings') else ""))
@@ -2694,7 +3260,7 @@ if do_scan:
                                 {'name':f'📝 All Reasons ({len(r["reasons"])})','value':reasons_str[:1024],'inline':False},
                                 *([{'name':'📝 Reasons (continued)','value':reasons_str[1024:2048],'inline':False}] if len(reasons_str)>1024 else [])
                             ],
-                            'footer':{'text':f'APEX4 Intelligence Terminal • {datetime.now(timezone.utc).strftime("%H:%M:%S")} UTC'}
+                            'footer':{'text':f'APEX4.5 Intelligence Terminal • {datetime.now(timezone.utc).strftime("%H:%M:%S")} UTC'}
                         })
                     st.session_state.alerted_sigs.add(ak_recheck)
                     _ch=[c for c,v in [('Discord',eff_s.get('discord_webhook')),('Telegram',eff_s.get('tg_token') and eff_s.get('tg_chat_id'))] if v]
@@ -2803,7 +3369,7 @@ if st.session_state.get('sentinel_active') and do_scan and st.session_state.scan
                                            f"TP1: `${_tp1:.6f}` | TP2: `${_tp2:.6f}` | TP3: `${_tp3:.6f}`\n"
                                            f"🛑 SL: `${_s_:.6f}`"),
                             "fields":[{'name':f'📝 All Reasons ({len(r["reasons"])})','value':"\n".join([f"▸ {x}" for x in r['reasons']])[:1024],'inline':False}],
-                            "footer":{"text":f"APEX4 Sentinel — Top 100 | {datetime.now(timezone.utc).strftime('%H:%M UTC')}"}})
+                            "footer":{"text":f"APEX4.5 Sentinel — Top 100 | {datetime.now(timezone.utc).strftime('%H:%M UTC')}"}})
                     st.session_state.alerted_sigs.add(ak)
 
         chk_f=st.session_state.get('sentinel_total_checked',0)
@@ -2900,6 +3466,85 @@ else:
     with tab_e:
         st.markdown('<div class="tab-desc"><b>Early Signal</b> — Pre-pump alignment. Watchlist — often move into Squeeze/Breakout within 1–4h.</div>',unsafe_allow_html=True)
         [render_card(r,r.get('pump_score',0)>=90,r.get('dual_confirmed',False)) for r in ea] if ea else st.markdown('<div class="empty-st">📡 No early signals</div>',unsafe_allow_html=True)
+
+# ── DST ISOLATED SCANNER SECTION ─────────────────────────────────────────
+st.markdown('---')
+st.markdown('<div style="font-family:monospace;font-weight:700;font-size:.85rem;color:#0284c7;padding:8px 0;">🔵 DEMA+ST INDEPENDENT SCANNER</div>', unsafe_allow_html=True)
+
+dst_col1, dst_col2, dst_col3 = st.columns([2,2,4])
+with dst_col1:
+    dst_run = st.button("▶ Run Now", use_container_width=True)
+with dst_col2:
+    dst_interval = st.number_input("Interval (min)", 1, 60, int(eff_s.get('dst_interval', 5)), key='dst_interval_input')
+with dst_col3:
+    st.markdown(f'<div style="font-family:monospace;font-size:.6rem;color:#64748b;padding-top:8px;">Last scan: {st.session_state.get("dst_last_scan","–")} | Signals found: {len(st.session_state.get("dst_results",[]))} | 🟢 Auto-running every {int(eff_s.get("dst_interval",5))} min</div>', unsafe_allow_html=True)
+
+# Auto-run on startup and every dst_interval minutes
+dst_last_ts = st.session_state.get('dst_last_ts', 0)
+dst_should_run = dst_run or (time.time() - dst_last_ts >= dst_interval * 60)
+
+if dst_should_run:
+    coin_list = st.session_state.get('last_coin_list', [])
+    if not coin_list:
+        st.warning("⚠️ Run an APEX4.5 scan first so DEMA+ST has a coin list to work with.")
+    else:
+        with st.spinner(f"🔵 DEMA+ST scanning {len(coin_list)} coins on {eff_s.get('dst_timeframe','5m')}..."):
+            try:
+                ccxt_mod, _ = _load_heavy()
+                exchange_clients = {}
+                for ex_id in ['gate','mexc','bybit','binance']:
+                    try:
+                        exchange_clients[ex_id] = getattr(ccxt_mod, ex_id)({'enableRateLimit': True})
+                    except:
+                        pass
+                dst_signals = run_dst_scan(coin_list, eff_s, exchange_clients)
+                st.session_state['dst_results'] = dst_signals
+                st.session_state['dst_last_scan'] = datetime.now(timezone.utc).strftime('%H:%M:%S')
+                st.session_state['dst_last_ts'] = time.time()
+                st.session_state['dst_scan_count'] = st.session_state.get('dst_scan_count', 0) + 1
+
+                # Send Discord alerts for new signals
+                alerted = st.session_state.get('dst_alerted', set())
+                for sig in dst_signals:
+                    ak = f"{sig['symbol']}_{sig['direction']}_{sig['scan_time']}"
+                    if ak not in alerted and eff_s.get('discord_webhook'):
+                        send_dst_discord_alert(eff_s['discord_webhook'], sig)
+                        alerted.add(ak)
+                st.session_state['dst_alerted'] = alerted
+                st.success(f"✅ DEMA+ST scan complete — {len(dst_signals)} signals found")
+            except Exception as e:
+                st.error(f"DST scan error: {e}")
+
+# Display DST results
+dst_results = st.session_state.get('dst_results', [])
+if dst_results:
+    st.markdown(f'<div style="font-family:monospace;font-size:.65rem;color:#0284c7;padding:4px 0;">🔵 {len(dst_results)} DEMA+ST signals — {st.session_state.get("dst_last_scan","–")} UTC</div>', unsafe_allow_html=True)
+    for sig in dst_results:
+        dir_color = "#059669" if sig['direction'] == 'LONG' else "#dc2626"
+        dir_bg = "#f0fdf4" if sig['direction'] == 'LONG' else "#fef2f2"
+        dir_border = "#86efac" if sig['direction'] == 'LONG' else "#fca5a5"
+        st.markdown(f'''
+        <div style="background:{dir_bg};border:1px solid {dir_border};border-left:4px solid {dir_color};border-radius:8px;padding:10px 14px;margin:6px 0;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <span style="font-family:monospace;font-weight:700;font-size:.8rem;color:{dir_color};">🔵 {sig["symbol"]} — {sig["direction"]}</span>
+            <span style="font-family:monospace;font-size:.6rem;color:#64748b;">{sig.get("exchange","–")} • {sig.get("tf","5m")} • {sig.get("scan_time","–")} UTC</span>
+          </div>
+          <div style="display:flex;gap:16px;flex-wrap:wrap;">
+            <span style="font-family:monospace;font-size:.65rem;color:#1e293b;">📍 Entry: <b>${sig["close"]:.6f}</b></span>
+            <span style="font-family:monospace;font-size:.65rem;color:#059669;">🎯 TP: <b>${sig["tp"]:.6f}</b></span>
+            <span style="font-family:monospace;font-size:.65rem;color:#dc2626;">🛑 SL: <b>${sig["sl"]:.6f}</b></span>
+            <span style="font-family:monospace;font-size:.65rem;color:#0284c7;">R:R <b>{sig["rr"]}</b></span>
+          </div>
+          <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:4px;">
+            <span style="font-family:monospace;font-size:.6rem;color:#64748b;">RSI: {sig["rsi"]}</span>
+            <span style="font-family:monospace;font-size:.6rem;color:#64748b;">VOL: {sig["vol_ratio"]}×</span>
+            <span style="font-family:monospace;font-size:.6rem;color:#64748b;">ST flip: {sig["fresh_bars"]} bars ago</span>
+            <span style="font-family:monospace;font-size:.6rem;color:#64748b;">DEMA: ${sig["dema"]:.6f}</span>
+            <span style="font-family:monospace;font-size:.6rem;color:#64748b;">TP1: ${sig["tp1"]:.6f} | TP2: ${sig["tp2"]:.6f} | TP3: ${sig["tp3"]:.6f}</span>
+          </div>
+        </div>''', unsafe_allow_html=True)
+else:
+    st.markdown('<div style="font-family:monospace;font-size:.65rem;color:#94a3b8;padding:8px 0;">🔵 No DEMA+ST signals yet — click Run DEMA+ST Scan</div>', unsafe_allow_html=True)
 
 if eff_s.get('auto_scan'):
     st.markdown(f'<div style="text-align:center;font-family:monospace;font-size:.62rem;color:#9ca3af;padding:16px 0;">🤖 Auto-Pilot Active — Next scan in {eff_s["auto_interval"]} minute(s)</div>',unsafe_allow_html=True)
