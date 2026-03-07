@@ -1,4 +1,3 @@
-%%writefile /content/app.py
 import streamlit as st
 import asyncio
 import pandas as pd
